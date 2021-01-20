@@ -8,7 +8,9 @@ export enum ErrorFromEnum {
   MONGODB_VALIDATOR,
   NODEJS_DUPLICATE_EMAIL_VALIDATOR,
   CATCH,
+  NODEJS_USER_IS_NOT_EXIST,
 }
+// TODO: change number code error
 
 export class HttpError extends Error {
   public errorInputForm: InputFormError[] = [];
@@ -37,6 +39,12 @@ export class HttpError extends Error {
           input: 'email',
           message: 'user is exist',
         },
+      ];
+    } else if (errorFrom === ErrorFromEnum.NODEJS_USER_IS_NOT_EXIST) {
+      this.errorCode = 407;
+      this.errorMessage = 'NODEJS: User not exist ';
+      this.errorInputForm = [
+        { input: 'undefined', message: 'user is not exist' },
       ];
     } else if (errorFrom === ErrorFromEnum.CATCH) {
       if (errorBody?.code === 11000) {
