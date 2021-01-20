@@ -19,7 +19,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     'Access-Control-Allow-Headers',
     'Origin, Content-Type, X-Requested-With, Accept'
   );
-  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, DELETE');
+  res.setHeader(
+    'Access-Control-Allow-Methods',
+    'GET,POST, PUT,PATCH, OPTIONS, DELETE'
+  );
   next();
 });
 app.use('/api/user', user);
@@ -27,12 +30,10 @@ app.use('/api/user', user);
 app.use((err: HttpError, req: Request, res: Response, next: NextFunction) => {
   const ipReqest = req.connection.remoteAddress;
   console.error(
-    chalk.red(
-      `[Node ---> Error] from ip :  ${ipReqest}`,
-      err.errorCode,
-      err.errorMessageServerLog,
-      err.errorMessage
-    )
+    chalk.red(`[Node ---> Error] from ip :  ${ipReqest}`),
+    err.errorCode,
+    err.errorMessageServerLog,
+    err.errorMessage
   );
   console.dir(err.errorInputForm);
   res
