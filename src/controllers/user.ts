@@ -95,32 +95,54 @@ export const updateOrCreateUserFromSocialMedia: RequestHandler = async (
   });
   if (isUserExist) {
     const emailUser = { email: userSocilaMedia.email };
-    const dataToUpdata = {
-      $set: {
-        email: req.body.email,
-        emailVerified: req.body.emailVerified,
-        firstName: req.body.firstName,
-        lastName: req.body.lastName,
-        isNewUser: req.body.isNewUser,
-        photoId: req.body.photoId,
-        providerId: req.body.providerId,
-        uid: req.body.uid,
-        credits: isUserExist.credits,
-      },
-    };
-    console.log('USER update from social media ', req.body.email);
+    let dataToUpdata;
+    if (!isUserExist.isManualOwnDataUser) {
+      console.log('USER WITH SOCIAL DATA');
+      dataToUpdata = {
+        $set: {
+          email: userSocilaMedia.email,
+          emailVerified: userSocilaMedia.emailVerified,
+          firstName: userSocilaMedia.firstName,
+          lastName: userSocilaMedia.lastName,
+          isNewUser: userSocilaMedia.isNewUser,
+          photoId: userSocilaMedia.photoId,
+          providerId: userSocilaMedia.providerId,
+          uid: userSocilaMedia.uid,
+          credits: isUserExist.credits,
+        },
+      };
+    } else {
+      console.log('USER WITH OWN DATA');
+      dataToUpdata = {
+        $set: {
+          // email: userSocilaMedia.email,  no accepted change email for user from social media
+          emailVerified: userSocilaMedia.emailVerified,
+          // firstName: userSocilaMedia.firstName,  no accepted change  firstName where is own data user
+          // lastName: userSocilaMedia.lastName,
+          isNewUser: userSocilaMedia.isNewUser,
+          photoId: userSocilaMedia.photoId,
+          providerId: userSocilaMedia.providerId,
+          uid: userSocilaMedia.uid,
+          // credits: isUserExist.credits,
+        },
+      };
+    }
+    console.log('USER UPDATE from SocialM ', userSocilaMedia.email);
     //UPDATE METHOD
     await user.collection.findOneAndUpdate(emailUser, dataToUpdata);
     res.status(201).send({ user: userSocilaMedia, msg: 'Update user from SM' });
   } else {
     // CREATE METHOD
-    console.log('USER create from social media ', req.body.email);
+    console.log('USER CREATE from SocialM ', userSocilaMedia.email);
     user.save();
     res.status(200).send({ user: userSocilaMedia, msg: 'Create user from SM' });
   }
   try {
   } catch (error) {
-    console.log('USER ERROR create or update user from SM', req.body.email);
+    console.log(
+      'USER ERROR create or update user from SocialM',
+      userSocilaMedia.email
+    );
     res.status(404).send({
       user: userSocilaMedia.email,
       msg: 'Error create or update user from SM',
@@ -155,7 +177,7 @@ export const updateAndSaveEditedManualuUserData: RequestHandler = async (
     req.body.opinion
   );
   const user: IUserManualData = new UserModelSchema(userManualData);
-
+  // TODO: don't accept change email if user is from social media
   const isUserExist = await user.collection.findOne({
     email: userManualData.email,
   });
@@ -164,10 +186,50 @@ export const updateAndSaveEditedManualuUserData: RequestHandler = async (
     return next(
       new HttpError(
         ErrorFromEnum.NODEJS_USER_IS_NOT_EXIST,
-        'try update user on not exist user from email: ' + userManualData
+        'try update user on not exist user from email: ' + userManualData.email
       )
     );
   }
-  console.log('PACH DATA USER', userManualData);
-  res.send({ msg: 'ok' }).status(200);
+  const emailUser = { email: userManualData.email };
+  let dataToUpdata;
+  if (
+    isUserExist.providerId === 'facebook.com' ||
+    isUserExist.providerId === 'google.com'
+  ) {
+    dataToUpdata = {
+      $set: {
+        // email: req.body.email, no accepted change email for user from social media
+        nick: userManualData.nick,
+        firstName: userManualData.firstName,
+        lastName: userManualData.lastName,
+        phone: userManualData.phone,
+        opinion: userManualData.opinion,
+        //  credits: isUserExist.credits,
+        isManualOwnDataUser: userManualData.isManualOwnDataUser,
+      },
+    };
+  } else {
+    // TODO: use transaction to update data in mongoDB and Firebase if email is diffrent
+    dataToUpdata = {
+      $set: {
+        email: userManualData.email,
+        nick: userManualData.nick,
+        firstName: userManualData.firstName,
+        lastName: userManualData.lastName,
+        phone: userManualData.phone,
+        opinion: userManualData.opinion,
+        isManualOwnDataUser: userManualData.isManualOwnDataUser,
+        //  credits: isUserExist.credits,
+      },
+    };
+  }
+
+  console.log('USER update manual data ', userManualData.email);
+  //UPDATE METHOD
+  await user.collection.findOneAndUpdate(emailUser, dataToUpdata);
+  res
+    .status(201)
+    .send({ user: userManualData, msg: 'Update user from SM to own data' });
+  // console.log('PACH DATA USER', userManualData);
+  // res.send({ msg: 'update user', userManualData }).status(200);
 };

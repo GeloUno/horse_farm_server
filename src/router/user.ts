@@ -7,6 +7,7 @@ import { body } from 'express-validator';
 import { updateAndSaveEditedManualuUserData } from './../controllers/user';
 
 const router = Router();
+// TODO: firebase SDK check email is the same from token and body is not the same throw error !!! on chache data user !!!
 
 router.get('/');
 router.post(
