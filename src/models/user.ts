@@ -1,20 +1,16 @@
+
 import { model, Schema, Model, Document, now } from 'mongoose';
 import {
-  Contains,
   IsEmail,
   isEmail,
-  IsEmpty,
   IsNotEmpty,
-  Length,
-  MinLength,
 } from 'class-validator';
 
 export interface IUser extends Document, UserBase {
-  isManualDataUser: boolean;
+  isManualOwnDataUser: boolean;
   createdAt: Date;
 }
 export interface IUserSocialMedia extends Document, UserSocilaMedia {
-  isManualDataUser: boolean;
   createdAt: Date;
   emailVerified: boolean;
   firstName: string;
@@ -25,40 +21,78 @@ export interface IUserSocialMedia extends Document, UserSocilaMedia {
   uid: string;
   nick: string | undefined;
 }
-export interface IUserManualData extends Document, UserManualData {
-  nick: string;
+export interface IUserManualDataEdited extends Document, UserManualDataEdited {
+  _id: string,
+  email: string;
   firstName: string;
   lastName: string;
-  phone: number;
-  email: string;
+  nick: string;
+  phone: string;
   opinion: string | undefined;
 }
-
-export class UserBase {
+interface IUserBase {
+  email: String;
+  uid: string;
+  providerId: string;
+  entityAccess: string;
   isManualOwnDataUser: boolean;
-  credits: number = 0;
+  isAccessToMakeBooking: boolean;
+  setIsManualOwnDataUser: (isManualOwnDataUser: boolean) => void;
+  setIsAccessToMakeBooking(isAccessToMakeBooking: boolean): void;
+}
+
+export class UserBase implements IUserBase {
   @IsEmail()
   @IsNotEmpty({ message: 'CV email: it not should be empty' })
   email: String;
-  constructor(email: string, isManualOwnDataUser = false) {
+
+  @IsNotEmpty({ message: 'CV uid: it not should be empty' })
+  uid: string;
+
+  @IsNotEmpty({ message: 'CV providerId: it not should be empty' })
+  providerId: string;
+
+  @IsNotEmpty({ message: 'CV emailVerified: it not should be empty' })
+  emailVerified: boolean;
+  // TODO: make emnum entitis access
+  entityAccess = 'user';
+  isManualOwnDataUser: boolean;
+  isAccessToMakeBooking: boolean;
+  credits: number = 0;
+  constructor(
+    email: string,
+    providerId: string,
+    emailVerified: boolean,
+    uid: string,
+    isManualOwnDataUser = false,
+    isAccessToMakeBooking = false
+  ) {
     this.email = email;
+    this.providerId = providerId;
+    this.emailVerified = emailVerified;
+    this.uid = uid;
+    this.isManualOwnDataUser = isManualOwnDataUser;
+    this.isAccessToMakeBooking = isAccessToMakeBooking;
+  }
+
+  public setIsManualOwnDataUser(isManualOwnDataUser: boolean) {
     this.isManualOwnDataUser = isManualOwnDataUser;
   }
-  /**if user change data by horse farm */
-  // set ManualDataUser(isManualData: boolean) {
-  //   this.isManualOwnDataUser = isManualData;
-  // }
+  public setIsAccessToMakeBooking(isAccessToMakeBooking: boolean) {
+    this.isAccessToMakeBooking = isAccessToMakeBooking;
+  }
+
+
 }
 
 export class UserSocilaMedia extends UserBase {
-  emailVerified: boolean;
   firstName: string;
   lastName: string;
   isNewUser: boolean;
   photoId: string;
-  providerId: string;
-  uid: string;
   nick: string | undefined;
+  phone: string | undefined;
+  opinion: string | undefined;
   constructor(
     email: string,
     emailVerified: boolean,
@@ -70,39 +104,48 @@ export class UserSocilaMedia extends UserBase {
     uid: string,
     nick?: string
   ) {
-    super(email);
-    this.emailVerified = emailVerified;
+    super(email, providerId, emailVerified, uid);
     this.firstName = firstName;
     this.lastName = lastName;
     this.isNewUser = isNewUser;
     this.photoId = photoId;
-    this.providerId = providerId;
-    this.uid = uid;
     this.nick = nick;
   }
+
 }
 
-export class UserManualData extends UserBase {
-  @IsNotEmpty({ message: 'CV nick: it not should be empty' })
-  nick: string;
-  @IsNotEmpty({ message: 'CV firstName: it not should be empty' })
-  firstName: string;
-  @IsNotEmpty({ message: 'CV lastName: it not should be empty' })
-  lastName: string;
-  @IsNotEmpty({ message: 'CV phone: it not should be empty' })
-  phone: number;
+export class UserManualDataEdited extends UserBase {
+  @IsNotEmpty({ message: 'CV id: it not should be empty' })
+  _id: string;
+
   @IsNotEmpty({ message: 'CV email: it not should be empty' })
   email: string;
+
+  @IsNotEmpty({ message: 'CV nick: it not should be empty' })
+  firstName: string;
+
+  @IsNotEmpty({ message: 'CV firstName: it not should be empty' })
+  lastName: string;
+
+  @IsNotEmpty({ message: 'CV lastName: it not should be empty' })
+  nick: string;
+  @IsNotEmpty({ message: 'CV phone: it not should be empty' })
+  phone: string;
   opinion: string | undefined;
   constructor(
-    nick: string,
+    _id: string,
+    email: string,
     firstName: string,
     lastName: string,
-    phone: number,
-    email: string,
+    nick: string,
+    phone: string,
+    uid: string,
+    providerId: string,
+    emailVerified: boolean,
     opinion?: string | undefined
   ) {
-    super(email, true);
+    super(email, providerId, emailVerified, uid, true, true);
+    this._id = _id
     this.nick = nick;
     this.firstName = firstName;
     this.lastName = lastName;
@@ -120,17 +163,25 @@ const UserSchema: Schema = new Schema({
     validate: [isEmail, 'mDB incorrect adress email'],
     // trim: true,
   },
-  emailVerified: { type: Boolean, trim: true },
+  // emailVerified: { type: Boolean, trim: true },
   firstName: { type: String, trim: true },
   lastName: { type: String, trim: true },
-  isNewUser: { type: Boolean, trim: true },
+  phone: { type: String, trim: true },// unique: true
+  // isNewUser: { type: Boolean, trim: true },
   photoId: { type: String, trim: true },
   providerId: { type: String, trim: true },
   progressLearning: { type: Array },
-  horseFarmLearningId: { type: Array },
-  uid: { type: String, trim: true },
+  HoursFarmLearning: { type: Array },
+  uid: { type: String, trim: true, unique: true, },
+  pid: { type: String, trim: true, unique: true, },
   nick: { type: String, trim: true },
+  opinion: { type: String, trim: true },
+  idHorseFarmFavorite: { type: Array },
+  idOpinionHorseFarm: { type: String, trim: true },
+  idOpinionWebSide: { type: String, trim: true },
   isManualOwnDataUser: { type: Boolean, required: true },
+  isAccessToMakeBooking: { type: Boolean, required: true },// it will be array of favorite horse farm
+  entityAccess: { type: String, trim: true },
   credits: { type: Number, required: true },
   createdAt: { type: Date, default: Date.now, required: true },
 });
@@ -143,29 +194,5 @@ const UserSchema: Schema = new Schema({
 //   console.log(this);
 // };
 export const UserModelSchema: Model<
-  IUser | IUserSocialMedia | IUserManualData
+  IUser | IUserSocialMedia | IUserManualDataEdited
 > = model('User', UserSchema);
-
-// const UserSchemaSocialMedia: Schema = new Schema({
-//   email: {
-//     type: String,
-//     required: true,
-//     validate: [isEmail, 'mDB incorrect adress email'],
-//   },
-//   emailVerified: { type: Boolean, required: true, trim: true },
-//   firstName: { type: String, required: true, trim: true },
-//   lastName: { type: String, required: true, trim: true },
-//   isNewUser: { type: Boolean, required: true, trim: true },
-//   photoId: { type: String, required: true, trim: true },
-//   providerId: { type: String, required: true, trim: true },
-//   uid: { type: String, required: true, trim: true },
-//   isManualOwnDataUser: { type: Boolean },
-//   nick: { type: String, trim: true }, // required ??
-//   createdAt: { type: Date, default: Date.now, required: true },
-// });
-
-// export const UserSocialMediaModelSchema: Model<IUserSocialMedia> = model(
-//   'User',
-//   UserSchemaSocialMedia
-// );
-// //

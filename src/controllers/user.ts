@@ -1,4 +1,4 @@
-import { RequestHandler } from 'express';
+import { NextFunction, Request, Response, RequestHandler } from 'express';
 import { validateOrReject } from 'class-validator';
 import {
   UserModelSchema,
@@ -8,228 +8,602 @@ import {
   UserBase,
 } from '../models/user';
 import { ErrorFromEnum, HttpError } from '../models/Errors/httpError';
-import { validationResult, body } from 'express-validator';
-import { UserManualData, IUserManualData } from '../models/user';
+import { UserManualDataEdited, IUserManualDataEdited } from '../models/user';
+import { ValidatorExpressChecker } from './ValidatorExpressChecker';
+import { UserFirebase } from '../models/UserFirebase';
+import { CompareEmails } from '../models/CompareEmail';
+import { UserMongoDB } from '../models/UserMongoDB';
+import { ErrorsLogMessangeBuilder } from '../models/ServerLog';
+import { UserActions } from "../models/UserActions";
+import { CompareId } from '../models/CompareId';
 
-export const createUser: RequestHandler = async (req, res, next) => {
-  const errors = validationResult(req);
-  const errorMessageSrverLog: string = `Manual create user: ${req.body.email}`;
 
-  if (!errors.isEmpty()) {
-    return next(
-      new HttpError(
-        ErrorFromEnum.EXPRESS_VALIDATOR,
-        errorMessageSrverLog,
-        errors
-      )
-    );
+
+//
+// CREATE USER MANUAL BY PASSWORD
+//
+
+export const createUser = async (req: Request, res: Response, next: NextFunction) => {
+
+  const valdatorExpressCheker = new ValidatorExpressChecker(req, false, UserActions.CREATE_USER);
+  await validateOrReject(valdatorExpressCheker);
+  const isError = valdatorExpressCheker.isError();
+
+  let emailFromBodyRequest: string = req.body?.email;
+  let uidFirebaseFromBodyRequest: string = req.body?.uid;
+
+  emailFromBodyRequest && (valdatorExpressCheker.email = emailFromBodyRequest)
+
+  if (isError) {
+    return next(valdatorExpressCheker.returnError());
   }
+
   try {
-    let userToValidationReqest = new UserBase(
-      req.body.email
-      // req.body.lastName,
-      // req.body.firstName,
-      // req.body.nick
+
+    const userFirebase = new UserFirebase(uidFirebaseFromBodyRequest)
+    await validateOrReject(userFirebase);
+
+    const { email: emailUserFirebase } = await userFirebase.getUserById()
+
+    const compareEmails = new CompareEmails(emailUserFirebase!, emailFromBodyRequest!, false)
+
+    await validateOrReject(compareEmails);
+
+    if (compareEmails.isError()) {
+      return next(compareEmails.returnError());
+    }
+
+  } catch (error) {
+    const errorMessangeLog = new ErrorsLogMessangeBuilder(error, emailFromBodyRequest, UserActions.CREATE_USER);
+    return next(new HttpError(
+      ErrorFromEnum.FIREBASE_ERROR_USER_NO_EXIST,
+      `${errorMessangeLog}`,
+    ))
+  }
+
+  try {
+    let userCreate = new UserBase(
+      req.body.email,
+      req.body.providerId,
+      req.body.emailVerified,
+      req.body.uid,
     );
 
     // CLASS VALIDATOR as CV
-    await validateOrReject(userToValidationReqest);
+    await validateOrReject(userCreate);
 
-    const user: IUser = new UserModelSchema(userToValidationReqest);
+    userCreate.setIsAccessToMakeBooking(false);
+    userCreate.setIsManualOwnDataUser(false);
 
-    const isUserExist = await user.collection.findOne({
-      email: userToValidationReqest.email,
-    });
+    const user: IUser = new UserModelSchema(userCreate) as IUser;
 
+    const userMongoDB = new UserMongoDB(user);
+    await validateOrReject(userMongoDB);
+
+    const isUserExist = await userMongoDB.getUserByEmail();
     if (isUserExist) {
+      const errorMessageSrverLog = new ErrorsLogMessangeBuilder(`MongoDB user is already exist, DUPLICATE EMAIL`, emailFromBodyRequest, UserActions.CREATE_USER)
       return next(
         new HttpError(
           ErrorFromEnum.NODEJS_DUPLICATE_EMAIL_VALIDATOR,
-          errorMessageSrverLog
+          `${errorMessageSrverLog}`
         )
       );
     }
-    await user.save();
 
+    const dataUserMongoDB = await userMongoDB.saveUser();
+
+    console.log('USER create by password: ', dataUserMongoDB.email)
     res.status(201).json({
       messaga: 'create user',
-      user,
+      user: {
+        id: dataUserMongoDB._id,
+        email: dataUserMongoDB.email,
+        credits: dataUserMongoDB.credits,
+        isAccessToMakeBooking: dataUserMongoDB.isAccessToMakeBooking,
+        isManualOwnDataUser: dataUserMongoDB.isManualOwnDataUser,
+        entityAccess: dataUserMongoDB.entityAccess,
+      }
     });
+
   } catch (error) {
-    return next(
-      new HttpError(ErrorFromEnum.CATCH, errorMessageSrverLog, error)
-    );
-  }
-};
 
-export const updateOrCreateUserFromSocialMedia: RequestHandler = async (
-  req,
-  res,
-  next
-) => {
-  const errors = validationResult(req);
-  const errorMessageSrverLog: string = `Update or create user form social media: ${req.body.email}`;
-
-  if (!errors.isEmpty()) {
+    const errorMessageSrverLog = `MONGODB manual create user : ${emailFromBodyRequest} ` + error.message;
     return next(
-      new HttpError(
-        ErrorFromEnum.EXPRESS_VALIDATOR,
-        errorMessageSrverLog,
-        errors
+      new HttpError(ErrorFromEnum.CATCH, errorMessageSrverLog,
+        error
       )
     );
   }
-  let userSocilaMedia = new UserSocilaMedia(
-    req.body.email,
-    req.body.emailVerified,
-    req.body.firstName,
-    req.body.lastName,
-    req.body.isNewUser,
-    req.body.photoId,
-    req.body.providerId,
-    req.body.uid
-  );
-  const user: IUserSocialMedia = new UserModelSchema(userSocilaMedia);
-  const isUserExist = await user.collection.findOne({
-    email: userSocilaMedia.email,
-  });
-  if (isUserExist) {
-    const emailUser = { email: userSocilaMedia.email };
-    let dataToUpdata;
-    if (!isUserExist.isManualOwnDataUser) {
-      console.log('USER WITH SOCIAL DATA');
-      dataToUpdata = {
-        $set: {
-          email: userSocilaMedia.email,
-          emailVerified: userSocilaMedia.emailVerified,
-          firstName: userSocilaMedia.firstName,
-          lastName: userSocilaMedia.lastName,
-          isNewUser: userSocilaMedia.isNewUser,
-          photoId: userSocilaMedia.photoId,
-          providerId: userSocilaMedia.providerId,
-          uid: userSocilaMedia.uid,
-          credits: isUserExist.credits,
-        },
-      };
-    } else {
-      console.log('USER WITH OWN DATA');
-      dataToUpdata = {
-        $set: {
-          // email: userSocilaMedia.email,  no accepted change email for user from social media
-          emailVerified: userSocilaMedia.emailVerified,
-          // firstName: userSocilaMedia.firstName,  no accepted change  firstName where is own data user
-          // lastName: userSocilaMedia.lastName,
-          isNewUser: userSocilaMedia.isNewUser,
-          photoId: userSocilaMedia.photoId,
-          providerId: userSocilaMedia.providerId,
-          uid: userSocilaMedia.uid,
-          // credits: isUserExist.credits,
-        },
-      };
-    }
-    console.log('USER UPDATE from SocialM ', userSocilaMedia.email);
-    //UPDATE METHOD
-    await user.collection.findOneAndUpdate(emailUser, dataToUpdata);
-    res.status(201).send({ user: userSocilaMedia, msg: 'Update user from SM' });
-  } else {
-    // CREATE METHOD
-    console.log('USER CREATE from SocialM ', userSocilaMedia.email);
-    user.save();
-    res.status(200).send({ user: userSocilaMedia, msg: 'Create user from SM' });
-  }
+};
+
+//
+// LOGIN USER MANUAL BY PASSWORD
+//
+
+export const loginUser: RequestHandler = async (req, res, next) => {
+  let emailFromBodyRequest: string = req.body?.email;
+  let uidFirebaseUserFromBodyRequest: string = req.body?.uid;
+
   try {
-  } catch (error) {
-    console.log(
-      'USER ERROR create or update user from SocialM',
-      userSocilaMedia.email
+    const valdatorExpressCheker = new ValidatorExpressChecker(req, false, UserActions.LOGIN_USER);
+    await validateOrReject(valdatorExpressCheker);
+    const isError = valdatorExpressCheker.isError();
+
+    emailFromBodyRequest && (valdatorExpressCheker.email = emailFromBodyRequest)
+
+    if (isError) {
+      return next(valdatorExpressCheker.returnError());
+    }
+
+    const userFirebase = new UserFirebase(uidFirebaseUserFromBodyRequest)
+    await validateOrReject(userFirebase);
+
+    const { email: emailUserFirebase, uid: idUserFirebase } = await userFirebase.getUserById()
+    try {
+
+
+      const compareEmails = new CompareEmails(emailUserFirebase!, emailFromBodyRequest!, false)
+
+      await validateOrReject(compareEmails);
+
+      if (compareEmails.isError()) {
+        return next(compareEmails.returnError());
+      }
+
+
+
+    } catch (error) {
+      const errorMessangeLog = new ErrorsLogMessangeBuilder(error, emailFromBodyRequest, UserActions.LOGIN_USER);
+
+      return next(new HttpError(
+        ErrorFromEnum.FIREBASE_ERROR_USER_NO_EXIST,
+        `${errorMessangeLog}`,
+      ))
+    }
+
+
+    let userLogin = new UserBase(
+      req.body.email,
+      req.body.providerId,
+      req.body.emailVerified,
+      req.body.uid,
     );
-    res.status(404).send({
-      user: userSocilaMedia.email,
-      msg: 'Error create or update user from SM',
+
+    // CLASS VALIDATOR as CV
+    await validateOrReject(userLogin);
+
+    const user: IUser = new UserModelSchema(userLogin) as IUser;
+
+    const userMongoDB = new UserMongoDB(user);
+    await validateOrReject(userMongoDB);
+
+    const dataUserMongoDB = await userMongoDB.getUserByEmail();
+    if (!dataUserMongoDB) {
+      const errorMessageSrverLog = new ErrorsLogMessangeBuilder(`MongoDB user is NOT EXIST ,try to login to user not exist in mongoDB`, emailFromBodyRequest, UserActions.LOGIN_USER)
+      return next(
+        new HttpError(
+          ErrorFromEnum.NODEJS_USER_IS_NOT_EXIST,
+          `${errorMessageSrverLog}`
+        )
+      );
+    }
+
+    const compareUserIdFirebaseAndMongoDB = new CompareId(dataUserMongoDB.uid, idUserFirebase, false);
+
+    await validateOrReject(compareUserIdFirebaseAndMongoDB);
+
+    if (compareUserIdFirebaseAndMongoDB.isError()) {
+      return next(compareUserIdFirebaseAndMongoDB.returnError())
+    }
+
+    console.log('USER Login by password: ', dataUserMongoDB.email)
+    res.status(201).json({
+      messaga: 'Login user',
+      user: {
+        id: dataUserMongoDB._id,
+        email: dataUserMongoDB.email,
+        credits: dataUserMongoDB.credits,
+        phone: dataUserMongoDB?.phone,
+        nick: dataUserMongoDB?.nick,
+        firstName: dataUserMongoDB?.firstName,
+        lastName: dataUserMongoDB?.lastName,
+        isAccessToMakeBooking: dataUserMongoDB.isAccessToMakeBooking,
+        isManualOwnDataUser: dataUserMongoDB.isManualOwnDataUser,
+        entityAccess: dataUserMongoDB.entityAccess,
+      }
     });
+
+  } catch (error) {
+
+    const errorMessageSrverLog = `MONGODB manual login user : ${emailFromBodyRequest} ` + error.message;
+    return next(
+      new HttpError(ErrorFromEnum.CATCH, errorMessageSrverLog,
+        error
+      )
+    );
   }
 };
+
+//
+// CREATE USERE FROM SOCILA MEDIA
+//
+
+export const createUserFromSocialMedia: RequestHandler = async (req, res, next) => {
+
+  let emailFromBodyRequest: string = req.body?.email;
+  let uidFirebaseUserFromBodyRequest: string = req.body?.uid;
+
+  try {
+    const valdatorExpressCheker = new ValidatorExpressChecker(req, true, UserActions.CREATE_USER);
+    await validateOrReject(valdatorExpressCheker);
+    const isError = valdatorExpressCheker.isError();
+
+    emailFromBodyRequest && (valdatorExpressCheker.email = emailFromBodyRequest)
+
+    if (isError) {
+      return next(valdatorExpressCheker.returnError());
+    }
+
+    const userFirebase = new UserFirebase(uidFirebaseUserFromBodyRequest)
+    await validateOrReject(userFirebase);
+
+    const { email: emailUserFirebase, uid: uidUserFirebase } = await userFirebase.getUserById()
+
+    try {
+      const compareEmails = new CompareEmails(emailUserFirebase!, emailFromBodyRequest!, true)
+
+      await validateOrReject(compareEmails);
+
+      if (compareEmails.isError()) {
+        return next(compareEmails.returnError());
+      }
+
+
+
+    } catch (error) {
+      const errorMessangeLog = new ErrorsLogMessangeBuilder(error, emailFromBodyRequest, UserActions.CREATE_USER);
+
+      return next(new HttpError(
+        ErrorFromEnum.FIREBASE_ERROR_USER_NO_EXIST,
+        `${errorMessangeLog}`,
+      ))
+    }
+
+
+    let userCreateSocialMedia = new UserSocilaMedia(
+      req.body.email,
+      req.body.emailVerified,
+      req.body.firstName,
+      req.body.lastName,
+      req.body.isNewUser,
+      req.body.photoId,
+      req.body.providerId,
+      req.body.uid,
+      req.body?.nick,
+    );
+
+    userCreateSocialMedia.setIsAccessToMakeBooking(false);
+    userCreateSocialMedia.setIsManualOwnDataUser(false);
+
+    // CLASS VALIDATOR as CV
+    await validateOrReject(userCreateSocialMedia);
+
+    const user: IUserSocialMedia = new UserModelSchema(userCreateSocialMedia) as IUserSocialMedia;
+
+    const userMongoDB = new UserMongoDB(user);
+    await validateOrReject(userMongoDB);
+
+    const isUserMongoDB = await userMongoDB.getUserByEmail();
+
+    if (isUserMongoDB) {
+      const errorMessageSrverLog = new ErrorsLogMessangeBuilder(`MongoDB  try to CREATE USER on existing user in mongoDB`, emailFromBodyRequest, UserActions.LOGIN_USER)
+      return next(
+        new HttpError(
+          ErrorFromEnum.NODEJS_USER_IS_NOT_EXIST,
+          `${errorMessageSrverLog}`
+        )
+      );
+    }
+
+    const dataUserMongoDB: IUserSocialMedia = (await userMongoDB.saveUser()) as IUserSocialMedia;
+
+    console.log('USER Create by socilaMedia: ', dataUserMongoDB.email)
+    res.status(201).json({
+      messaga: 'Create user SM',
+      user: {
+        id: dataUserMongoDB._id,
+        email: dataUserMongoDB.email,
+        emailVerified: dataUserMongoDB.emailVerified,
+        firstName: dataUserMongoDB.firstName,
+        lastName: dataUserMongoDB.lastName,
+        isNewUser: dataUserMongoDB.isNewUser,
+        photoId: dataUserMongoDB.photoId,
+        providerId: dataUserMongoDB.providerId,
+        uid: dataUserMongoDB.uid,
+        isManualOwnDataUser: dataUserMongoDB.isManualOwnDataUser,
+        isAccessToMakeBooking: dataUserMongoDB.isAccessToMakeBooking,
+        nick: dataUserMongoDB.nick,
+      }
+    });
+  } catch (error) {
+
+    const errorMessageSrverLog = `MONGODB socialMedia Create user : ${emailFromBodyRequest} ` + error.message;
+    return next(
+      new HttpError(ErrorFromEnum.CATCH, errorMessageSrverLog,
+        error
+      )
+    );
+  }
+};
+
+//
+// LOGIN USER BY SOCIAL MEDIA
+//
+
+export const loginUserFromSocialMedia: RequestHandler = async (req, res, next) => {
+
+  let emailFromBodyRequest: string = req.body?.email;
+  let uidFirebaseUserFromBodyRequest: string = req.body?.uid;
+
+  try {
+    const valdatorExpressCheker = new ValidatorExpressChecker(req, true, UserActions.LOGIN_USER);
+    await validateOrReject(valdatorExpressCheker);
+    const isError = valdatorExpressCheker.isError();
+
+    emailFromBodyRequest && (valdatorExpressCheker.email = emailFromBodyRequest)
+
+    if (isError) {
+      return next(valdatorExpressCheker.returnError());
+    }
+
+    const userFirebase = new UserFirebase(uidFirebaseUserFromBodyRequest)
+    await validateOrReject(userFirebase);
+
+    const { email: emailUserFirebase, uid: idUserFirebase } = await userFirebase.getUserById()
+
+    try {
+      const compareEmails = new CompareEmails(emailUserFirebase!, emailFromBodyRequest!, true)
+
+      await validateOrReject(compareEmails);
+
+      if (compareEmails.isError()) {
+        return next(compareEmails.returnError());
+      }
+
+
+
+    } catch (error) {
+      const errorMessangeLog = new ErrorsLogMessangeBuilder(error, emailFromBodyRequest, UserActions.LOGIN_USER);
+
+      return next(new HttpError(
+        ErrorFromEnum.FIREBASE_ERROR_USER_NO_EXIST,
+        `${errorMessangeLog}`,
+      ))
+    }
+
+
+    let userLoginSocialMedia = new UserSocilaMedia(
+      req.body.email,
+      req.body.emailVerified,
+      req.body.firstName,
+      req.body.lastName,
+      req.body.isNewUser,
+      req.body.photoId,
+      req.body.providerId,
+      req.body.uid,
+      req.body?.nick,
+    );
+
+    // CLASS VALIDATOR as CV
+    await validateOrReject(userLoginSocialMedia);
+
+    const user: IUserSocialMedia = new UserModelSchema(userLoginSocialMedia) as IUserSocialMedia;
+
+    const userMongoDB = new UserMongoDB(user);
+    await validateOrReject(userMongoDB);
+
+    const isUserMongoDB = await userMongoDB.getUserByFirebaseId();
+    if (!isUserMongoDB) {
+      const errorMessageSrverLog = new ErrorsLogMessangeBuilder(`MongoDB try to LOGIN on NOT existing user in mongoDB`, emailFromBodyRequest, UserActions.LOGIN_USER)
+      return next(
+        new HttpError(
+          ErrorFromEnum.NODEJS_USER_IS_NOT_EXIST,
+          `${errorMessageSrverLog}`
+        )
+      );
+    }
+
+    const compareUserIdFirebaseAndMongoDB = new CompareId(isUserMongoDB.uid, idUserFirebase, true);
+
+    await validateOrReject(compareUserIdFirebaseAndMongoDB);
+
+    if (compareUserIdFirebaseAndMongoDB.isError()) {
+      return next(compareUserIdFirebaseAndMongoDB.returnError())
+    }
+    //TODO: use it ? lastSignInTime:
+    //TODO: use it ? lastRefreshTime:
+
+
+    console.log('USER Login by socilaMedia: ', isUserMongoDB.email)
+    res.status(200).json({
+      messaga: 'Login user SM',
+      user: {
+        id: isUserMongoDB._id,
+        email: isUserMongoDB.email,
+        emailVerified: isUserMongoDB.emailVerified,
+        firstName: isUserMongoDB.firstName,
+        lastName: isUserMongoDB.lastName,
+        isNewUser: isUserMongoDB.isNewUser,
+        photoId: isUserMongoDB.photoId,
+        providerId: isUserMongoDB.providerId,
+        uid: isUserMongoDB.uid,
+        phone: isUserMongoDB.phone,
+        isManualOwnDataUser: isUserMongoDB.isManualOwnDataUser,
+        isAccessToMakeBooking: isUserMongoDB.isAccessToMakeBooking,
+        nick: isUserMongoDB.nick,
+      }
+    });
+  } catch (error) {
+
+    const errorMessageSrverLog = `MONGODB socialMedia Login user : ${emailFromBodyRequest} ` + error.message;
+    return next(
+      new HttpError(ErrorFromEnum.CATCH, errorMessageSrverLog,
+        error
+      )
+    );
+  }
+};
+
+
+//
+// UPDATE USER DATA
+//
 
 export const updateAndSaveEditedManualuUserData: RequestHandler = async (
   req,
   res,
   next
 ) => {
-  const errors = validationResult(req);
-  const errorMessageSrverLog: string = `Update and save edited manual user data: ${req.body.email}`;
 
-  if (!errors.isEmpty()) {
+
+  let emailFromBodyRequest: string = req.body?.email;
+  let uidFirebaseUserFromBodyRequest: string = req.body?.uid;
+  const isManualUserProvider: boolean = (req.body.providerId === 'password') ? (true) : (false)
+  try {
+    const valdatorExpressCheker = new ValidatorExpressChecker(req, isManualUserProvider, UserActions.UPDATE_USER);
+    await validateOrReject(valdatorExpressCheker);
+    const isError = valdatorExpressCheker.isError();
+
+    emailFromBodyRequest && (valdatorExpressCheker.email = emailFromBodyRequest)
+
+    if (isError) {
+      return next(valdatorExpressCheker.returnError());
+    }
+
+    const userFirebase = new UserFirebase(uidFirebaseUserFromBodyRequest)
+    await validateOrReject(userFirebase);
+
+    const { email: emailUserFirebase, uid: uidUserFirebase } = await userFirebase.getUserById()
+
+    try {
+      const compareEmails = new CompareEmails(emailUserFirebase!, emailFromBodyRequest!, true)
+
+      await validateOrReject(compareEmails);
+
+      if (compareEmails.isError()) {
+        return next(compareEmails.returnError());
+      }
+
+
+
+    } catch (error) {
+      const errorMessangeLog = new ErrorsLogMessangeBuilder(error, emailFromBodyRequest, UserActions.UPDATE_USER);
+
+      return next(new HttpError(
+        ErrorFromEnum.FIREBASE_ERROR_USER_NO_EXIST,
+        `${errorMessangeLog}`,
+      ))
+    }
+
+    let userManualData = new UserManualDataEdited(
+      req.body.id,
+      req.body.email,
+      req.body.firstName,
+      req.body.lastName,
+      req.body.nick,
+      req.body.phone,
+      req.body.uid,
+      req.body.providerId,
+      req.body.emailVerified,
+      req.body.opinion
+    );
+
+    userManualData.setIsAccessToMakeBooking(true);
+    userManualData.setIsManualOwnDataUser(true);
+
+    // CLASS VALIDATOR as CV
+    await validateOrReject(userManualData);
+
+    const user: IUserManualDataEdited = new UserModelSchema(userManualData) as IUserManualDataEdited;
+
+    const userMongoDB = new UserMongoDB(user);
+    await validateOrReject(userMongoDB);
+
+    const isUserMongoDB = await userMongoDB.getUserByMongoDBId();
+
+    if (!isUserMongoDB) {
+      const errorMessageSrverLog = new ErrorsLogMessangeBuilder(`MongoDB try to UPDATE DATA on NOT existing user in mongoDB`, emailFromBodyRequest, UserActions.UPDATE_USER)
+      return next(
+        new HttpError(
+          ErrorFromEnum.NODEJS_USER_IS_NOT_EXIST,
+          `${errorMessageSrverLog}`
+        )
+      );
+    }
+
+    const compareUserIdFirebaseAndMongoDB = new CompareId(isUserMongoDB.uid, uidUserFirebase, isManualUserProvider);
+
+    await validateOrReject(compareUserIdFirebaseAndMongoDB);
+
+    if (compareUserIdFirebaseAndMongoDB.isError()) {
+      return next(compareUserIdFirebaseAndMongoDB.returnError())
+    }
+
+    const compareIdUserMongoDBAndBodyId = new CompareId(isUserMongoDB._id.toString(), userManualData._id, isManualUserProvider);
+
+    await validateOrReject(compareIdUserMongoDBAndBodyId);
+
+    if (compareIdUserMongoDBAndBodyId.isError()) {
+      return next(compareIdUserMongoDBAndBodyId.returnError())
+    }
+
+
+    const data = await userMongoDB.findOneAndUpdate(UserActions.UPDATE_USER)
+
+    console.log('USER Updated : ', userManualData.email)
+    res.status(200).json({
+      msg: 'Update user data',
+      user: {
+        firstName: userManualData.firstName,
+        lastName: userManualData.lastName,
+        phone: userManualData.phone,
+        nick: userManualData.nick,
+        opinion: userManualData.opinion,
+        email: userManualData.email,
+      },
+    });
+
+  } catch (error) {
+
+    const errorMessageSrverLog = `MONGODB update user data: ${emailFromBodyRequest} ` + error.message;
     return next(
-      new HttpError(
-        ErrorFromEnum.EXPRESS_VALIDATOR,
-        errorMessageSrverLog,
-        errors
+      new HttpError(ErrorFromEnum.CATCH, errorMessageSrverLog,
+        error
       )
     );
   }
+};
 
-  let userManualData = new UserManualData(
-    req.body.nick,
-    req.body.firstName,
-    req.body.lastName,
-    req.body.phone,
-    req.body.email,
-    req.body.opinion
-  );
-  const user: IUserManualData = new UserModelSchema(userManualData);
-  // TODO: don't accept change email if user is from social media
-  const isUserExist = await user.collection.findOne({
-    email: userManualData.email,
+export const deleteUser: RequestHandler = async (req, res, next) => {
+
+}
+
+export const getUser: RequestHandler = async (req, res, next) => {
+
+  console.log('USER GET NO ACCEPTED METHOD: ',)
+  console.log('GET query', req.query)
+  console.log('GET body', req.body)
+
+  // const errorMessageSrverLog: string = `USER GET user: ${req.body.email}`;
+  //TODO: ADD TO DATA BASE LOCK IP
+
+  res.status(401).json({
+    //  FIXME: CZHANGE TO CURRENT DATA
+    messaga: 'user access denied',
+
   });
 
-  if (!isUserExist) {
-    return next(
-      new HttpError(
-        ErrorFromEnum.NODEJS_USER_IS_NOT_EXIST,
-        'try update user on not exist user from email: ' + userManualData.email
-      )
-    );
-  }
-  const emailUser = { email: userManualData.email };
-  let dataToUpdata;
-  if (
-    isUserExist.providerId === 'facebook.com' ||
-    isUserExist.providerId === 'google.com'
-  ) {
-    dataToUpdata = {
-      $set: {
-        // email: req.body.email, no accepted change email for user from social media
-        nick: userManualData.nick,
-        firstName: userManualData.firstName,
-        lastName: userManualData.lastName,
-        phone: userManualData.phone,
-        opinion: userManualData.opinion,
-        //  credits: isUserExist.credits,
-        isManualOwnDataUser: userManualData.isManualOwnDataUser,
-      },
-    };
-  } else {
-    // TODO: use transaction to update data in mongoDB and Firebase if email is diffrent
-    dataToUpdata = {
-      $set: {
-        email: userManualData.email,
-        nick: userManualData.nick,
-        firstName: userManualData.firstName,
-        lastName: userManualData.lastName,
-        phone: userManualData.phone,
-        opinion: userManualData.opinion,
-        isManualOwnDataUser: userManualData.isManualOwnDataUser,
-        //  credits: isUserExist.credits,
-      },
-    };
-  }
-
-  console.log('USER update manual data ', userManualData.email);
-  //UPDATE METHOD
-  await user.collection.findOneAndUpdate(emailUser, dataToUpdata);
-  res
-    .status(201)
-    .send({ user: userManualData, msg: 'Update user from SM to own data' });
-  // console.log('PACH DATA USER', userManualData);
-  // res.send({ msg: 'update user', userManualData }).status(200);
-};
+  // admin.auth().updateUser(userCreate.uid, {
+  //   phoneNumber:'+48507171999',
+  // })

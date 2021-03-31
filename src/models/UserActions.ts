@@ -1,0 +1,7 @@
+
+export enum UserActions {
+    CREATE_USER = 'CREATE_USER',
+    LOGIN_USER = 'LOGIN_USER',
+    DELETE_USER = 'DELETE_USER',
+    UPDATE_USER = 'UPDATE_USER'
+}
